@@ -1,0 +1,5 @@
+Notes:
+
+1.	When floor is called with certain direction; if there are internal orders in opposite direction, serve the one with the "caller" direction
+2.	Example; We are on the 1st floor; want to go to 3rd floor UP, and you receive 2nd floor DOWN (cost should be -1)
+3. 4th floor -> 2nd UP 3rd DOWN; should listen to first order (cost should be -1)
