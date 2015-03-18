@@ -40,6 +40,7 @@ pthread_mutex_t udpPack01Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 bool(*_sendOrder2Elevator)(ulong, int, int);
 int(*_getCost2Go2Floor)(int, int);
+void(*_clearButtonLamp)(int, bool);
 
 void* dispatchOrders(void *);
 /////////////////////////////////////////////////////////////////////////
@@ -109,22 +110,35 @@ void networkConnectionlessCallBack(netcard num, char *data, int32_t len){
 }
 
 void networkConnectionOrientedCallBack(chan extChan){
-	/*char data[256];
+	Chanorder rcvOrder;
 	ssize_t len;
 	nErr error;
-
-	if(NE_NO_ERROR != (error = chanRecv(extChan, data, &len, 256, 5))){ displayErr(error); closeChannel(extChan); return; }
-	data[len] = 0;	
-	printf("Received: %s\n", data);
-
-	displayErr(chanSend(extChan, (char*)"Ok, got you!", strlen("Ok, got you!")+1));
-	closeChannel(extChan);*/
+	
+	if(NE_NO_ERROR != (error = chanRecv(extChan, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+		displayErr(error); 
+		closeChannel(extChan);		
+	}
+	else{
+		pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
+		printf("Taking order from outside.\n");	
+		if(-1 == _getCost2Go2Floor(rcvOrder.floor, rcvOrder.direction)) rcvOrder.success = false;
+		else{
+			rcvOrder.success = true;	
+			_sendOrder2Elevator(rcvOrder.ID, rcvOrder.floor, rcvOrder.direction);
+		}
+		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+		
+		if(NE_NO_ERROR != (error = chanSend(extChan, (char*)&rcvOrder, sizeof(Chanorder)))) displayErr(error); 
+		else printf("Successful sending of confirmation of order to the origin TCP node\n");
+			
+		closeChannel(extChan);
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////
 
 
-void protocolInit(bool(*sendOrder2Elevator)(ulong, int, int), int(*getCost2Go2Floor)(int, int)){
+void protocolInit(bool(*sendOrder2Elevator)(ulong, int, int), int(*getCost2Go2Floor)(int, int), void(*clearButtonLamp)(int, bool)){
 	static int hasInitialize;
 	pthread_t dispatcher;
 	//pthread_t UDP_listener;
@@ -137,6 +151,7 @@ void protocolInit(bool(*sendOrder2Elevator)(ulong, int, int), int(*getCost2Go2Fl
 		srand(time(0));
 		_sendOrder2Elevator = sendOrder2Elevator;
 		_getCost2Go2Floor	= getCost2Go2Floor;
+		_clearButtonLamp	= clearButtonLamp;
 		Pack01.origin		= getMyNetCard();
 		hasInitialize++;
 	}
@@ -168,11 +183,33 @@ void internalOrderDone(ulong id){
 	pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
 	for(int i = 0; i < 8;i++){
 		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
-		if(tempOrder->ID == id) Pack01.orderQueue[i].status = 0;
+		if(tempOrder->ID == id) {
+			Pack01.orderQueue[i].status = 0;
+			//send clear signal
+			//printf("HW clear floor %d, dir %d", Pack01.orderQueue[i].myOrder.floor, Pack01.orderQueue[i].myOrder.direction);
+			_clearButtonLamp(Pack01.orderQueue[i].myOrder.floor, Pack01.orderQueue[i].myOrder.direction);
+		}
 	}
 	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 }
 
+void internalOrderPause(ulong id){
+	pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
+	for(int i = 0; i < 8;i++){
+		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
+		if(tempOrder->ID == id) Pack01.orderQueue[i].status = 1;
+	}
+	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+}
+
+void internalOrderResume(ulong id){
+	pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
+	for(int i = 0; i < 8;i++){
+		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
+		if(tempOrder->ID == id) Pack01.orderQueue[i].status = 2;
+	}
+	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+}
 
 void* dispatchOrders(void *){
 	while(1){
@@ -221,17 +258,55 @@ void* dispatchOrders(void *){
 		if(minCost != (unsigned int)-1){
 			//If minimum cost is outside make a thread to connect via TCP to remote peer
 			pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
+			netcard remoteNetcard = Pack01.orderQueue[minCostIdx].dest;
+			Chanorder remoteOrder;
+			
+			remoteOrder.ID = Pack01.orderQueue[minCostIdx].myOrder.ID;
+			remoteOrder.floor = Pack01.orderQueue[minCostIdx].myOrder.floor;
+			remoteOrder.direction = Pack01.orderQueue[minCostIdx].myOrder.direction;
+			remoteOrder.cod = COD_REQUEST;
+			
+			pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+			
 			if(Pack01.orderQueue[minCostIdx].dest != getMyNetCard()){
 				printf("Alien will do this(%d):%d\n",minCostIdx,minCost);
+				chan channel = createChannel(remoteNetcard);
+				nErr error;
+				
+				if(NE_NO_ERROR != (error = chanSend(channel, (char*)&remoteOrder, sizeof(Chanorder)))){
+					displayErr(error); 
+					closeChannel(channel); 
+					//return;
+				}
+				else{
+					printf("Successful sending, waiting for answer...\n");
+					internalOrderPause(remoteOrder.ID);
+					Chanorder rcvOrder;
+					ssize_t len;
+					if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+						displayErr(error); 
+						closeChannel(channel);
+						internalOrderResume(remoteOrder.ID);		
+					}
+					else{
+						if(rcvOrder.success){
+							internalOrderDone(remoteOrder.ID);
+							printf("Order has been served by remote peer\n");
+						}
+						if(remoteOrder.ID != rcvOrder.ID) printf("Order ID mismatch during TCP session\n");
+						closeChannel(channel);
+					}
+				}
 			}
 			//Else do the task
 			else{
+				pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
 				printf("this computer should serve this:%d!\n",minCost);	
 				volatile order *tempOrder = &(Pack01.orderQueue[minCostIdx].myOrder);
 				_sendOrder2Elevator(tempOrder->ID, tempOrder->floor, tempOrder->direction);
 				Pack01.orderQueue[minCostIdx].status = 1;		//waiting
+				pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 			}
-			pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 		}
 		usleep(100000);	
 	}

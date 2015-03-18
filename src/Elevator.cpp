@@ -18,6 +18,12 @@ bool go2floorFun(ulong requestID, int floorNumber, int direction){
 	else return false;
 }
 
+void clearButtonLampFun(int floor, bool upwards){
+	if(myOnlyElevator) return myOnlyElevator->clearButtonLamp(floor, upwards);
+	else return;
+}
+
+
 #define ABS(a) ({ __typeof__ (a) _a = (a); _a > 0 ? _a : -_a; })
 /*
 int main(){
@@ -149,7 +155,7 @@ bool Elevator::floorWithinRange(int floorNumber){
 
 Elevator::Elevator(){
 	myOnlyElevator = this;
-	protocolInit(go2floorFun, cost2get2floorFun);
+	protocolInit(go2floorFun, cost2get2floorFun, clearButtonLampFun);
 	 if (!elev_init()){
         printf("Unable to initialize elevator hardware!\n");
         exit(EXIT_FAILURE);
@@ -215,3 +221,10 @@ bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
 	_floorExtOrderID[floorNumber] = requestID;
 	return true;	
 }
+
+void Elevator::clearButtonLamp(int floor, bool upwards){
+	printf("HW clear floor %d, dir %d", floor, upwards);
+	if(upwards) elev_set_button_lamp(BUTTON_CALL_UP, floor, 0);
+	else	 	elev_set_button_lamp(BUTTON_CALL_DOWN, floor, 0);
+}
+

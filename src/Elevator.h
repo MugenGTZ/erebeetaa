@@ -36,9 +36,7 @@ class Elevator{
 		//static void* startThread(void* pVoid);
 		void 			updateElevator();
 		void 			serveInternalOrders();
+		void			clearButtonLamp(int floor, bool upwards);
 };
-
-int 	cost2get2floor(int floorNumber, int direction);
-bool 	go2floor(ulong requestID, int floorNumber, int direction);
 
 #endif
