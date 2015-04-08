@@ -22,11 +22,11 @@
 #define PORT_lst 30000
 
 typedef struct _extendedOrder{
-	order 		myOrder;									//id, floor, direction
-	netcard		origin;										//netcard origin machine
-	netcard		dest;										//netcard serving machine
-	int			cost;										//cost of order
-	int			status; 									//0 - done 1 - waiting 2 - created
+	order 				myOrder;									//id, floor, direction
+	netcard				origin;										//netcard origin machine
+	netcard				dest;										//netcard serving machine
+	unsigned int		cost;										//cost of order
+	int					status; 									//0 - done 1 - waiting 2 - created
 }extendedOrder;
 
 typedef struct _udpPack{
@@ -59,9 +59,9 @@ void networkConnectionlessCallBack(netcard num, char *data, int32_t len){
 			if(tmpPack->orderQueue[i].status == 2){
 				printf("Alien Cost(%d) = %d and our cost is: %d\n", i, tmpPack->orderQueue[i].cost, Pack01.orderQueue[i].cost);
 				if(tmpPack->orderQueue[i].cost < Pack01.orderQueue[i].cost){
-						printf("--(%lu,%lu)\n",tmpPack->orderQueue[i].myOrder.ID, Pack01.orderQueue[i].myOrder.ID);
+						//printf("--(%lu,%lu)\n",tmpPack->orderQueue[i].myOrder.ID, Pack01.orderQueue[i].myOrder.ID);
 					if(tmpPack->orderQueue[i].myOrder.ID == Pack01.orderQueue[i].myOrder.ID){
-						printf("-Allien\n");
+						//printf("-Allien\n");
 						//printf("Alien Cost(%d) = %d\n", i, tmpPack->orderQueue[i].cost);
 						Pack01.orderQueue[i].dest = tmpPack->orderQueue[i].dest;
 						Pack01.orderQueue[i].cost = tmpPack->orderQueue[i].cost;
@@ -83,6 +83,7 @@ void networkConnectionlessCallBack(netcard num, char *data, int32_t len){
 				int cost = _getCost2Go2Floor(tempOrder.floor, tempOrder.direction);
 				tmpPack->orderQueue[i].dest = getMyNetCard();
 				tmpPack->orderQueue[i].cost = cost;
+				//printf("Cost when sending back to origin is: %d\n", cost);
 				if(cost != -1) mustSend = true;
 			}
 		}
@@ -123,8 +124,10 @@ void networkConnectionOrientedCallBack(chan extChan){
 		printf("Taking order from outside.\n");	
 		if(-1 == _getCost2Go2Floor(rcvOrder.floor, rcvOrder.direction)) rcvOrder.success = false;
 		else{
-			rcvOrder.success = true;	
-			_sendOrder2Elevator(rcvOrder.ID, rcvOrder.floor, rcvOrder.direction);
+			if(_sendOrder2Elevator(rcvOrder.ID, rcvOrder.floor, rcvOrder.direction))
+				rcvOrder.success = true;
+			else
+				rcvOrder.success = false;
 		}
 		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 		
@@ -141,8 +144,7 @@ void networkConnectionOrientedCallBack(chan extChan){
 void protocolInit(bool(*sendOrder2Elevator)(ulong, int, int), int(*getCost2Go2Floor)(int, int), void(*clearButtonLamp)(int, bool)){
 	static int hasInitialize;
 	pthread_t dispatcher;
-	//pthread_t UDP_listener;
-
+	
 	initNetwork();
 	chanServerCallBack(networkConnectionOrientedCallBack);
 	dataServerCallBack(networkConnectionlessCallBack);
@@ -178,6 +180,9 @@ int sendOrder(order o){
 	return 0;
 }
 
+void printOrderStatus(){
+	for(int i = 0; i < 8;i++) printf("Order[%d]: ID = %lu   status = %d\n", i, Pack01.orderQueue[i].myOrder.ID, Pack01.orderQueue[i].status);	
+}
 
 void internalOrderDone(ulong id){
 	pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
@@ -190,6 +195,8 @@ void internalOrderDone(ulong id){
 			_clearButtonLamp(Pack01.orderQueue[i].myOrder.floor, Pack01.orderQueue[i].myOrder.direction);
 		}
 	}
+	printf("Called from internalOrderDone!\n");
+	printOrderStatus();
 	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 }
 
@@ -199,6 +206,8 @@ void internalOrderPause(ulong id){
 		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
 		if(tempOrder->ID == id) Pack01.orderQueue[i].status = 1;
 	}
+	printf("Called from internalOrderPause!\n");
+	printOrderStatus();
 	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 }
 
@@ -208,6 +217,8 @@ void internalOrderResume(ulong id){
 		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
 		if(tempOrder->ID == id) Pack01.orderQueue[i].status = 2;
 	}
+	printf("Called from internalOrderResume!\n");
+	printOrderStatus();
 	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 }
 
@@ -223,6 +234,7 @@ void* dispatchOrders(void *){
 			if(Pack01.orderQueue[i].status == 2){
 				skip = false;
 				Pack01.orderQueue[i].cost = _getCost2Go2Floor(tempOrder->floor, tempOrder->direction);
+				//printf("Cost is: %d\n", Pack01.orderQueue[i].cost);
 			}
 			else
 				Pack01.orderQueue[i].cost = -1;
@@ -250,7 +262,7 @@ void* dispatchOrders(void *){
 			}
 		}
 		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
-		
+		//printf("Found minimum is: %d\n", minCost);
 		//sendData(NETCARDBROADCAST, (char*)"Hello Filip!", 13);
 		//Broadcast all orders over UDP
 		//Find minimum Cost of all matrices
@@ -270,31 +282,43 @@ void* dispatchOrders(void *){
 			
 			if(Pack01.orderQueue[minCostIdx].dest != getMyNetCard()){
 				printf("Alien will do this(%d):%d\n",minCostIdx,minCost);
-				chan channel = createChannel(remoteNetcard);
-				nErr error;
-				
-				if(NE_NO_ERROR != (error = chanSend(channel, (char*)&remoteOrder, sizeof(Chanorder)))){
-					displayErr(error); 
-					closeChannel(channel); 
-					//return;
+				chan channel = createChannel(remoteNetcard);															    
+				if((int)channel < 0){
+					printf("Channel setup error. Closing the channel!\n"); 
+					closeChannel(channel);
 				}
 				else{
-					printf("Successful sending, waiting for answer...\n");
-					internalOrderPause(remoteOrder.ID);
-					Chanorder rcvOrder;
-					ssize_t len;
-					if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+					nErr error;
+				
+					if(NE_NO_ERROR != (error = chanSend(channel, (char*)&remoteOrder, sizeof(Chanorder)))){
 						displayErr(error); 
-						closeChannel(channel);
-						internalOrderResume(remoteOrder.ID);		
+						closeChannel(channel); 
+						//return;
 					}
 					else{
-						if(rcvOrder.success){
-							internalOrderDone(remoteOrder.ID);
-							printf("Order has been served by remote peer\n");
+						printf("Successful sending, waiting for answer...\n");
+						internalOrderPause(remoteOrder.ID);
+						Chanorder rcvOrder;
+						ssize_t len;
+						if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+							displayErr(error); 
+							closeChannel(channel);
+							internalOrderResume(remoteOrder.ID);		
 						}
-						if(remoteOrder.ID != rcvOrder.ID) printf("Order ID mismatch during TCP session\n");
-						closeChannel(channel);
+						else{
+							if(rcvOrder.success){
+								internalOrderDone(remoteOrder.ID);
+								printf("Order has been served by remote peer\n");
+							}
+							else{
+								printf("*****************************************************************************\n");
+								printf("Unsuccessful transaction!\n");							
+								printf("*****************************************************************************\n");
+								internalOrderResume(remoteOrder.ID);
+							}
+							if(remoteOrder.ID != rcvOrder.ID) printf("Order ID mismatch during TCP session\n");
+							closeChannel(channel);
+						}
 					}
 				}
 			}
@@ -303,8 +327,7 @@ void* dispatchOrders(void *){
 				pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
 				printf("this computer should serve this:%d!\n",minCost);	
 				volatile order *tempOrder = &(Pack01.orderQueue[minCostIdx].myOrder);
-				_sendOrder2Elevator(tempOrder->ID, tempOrder->floor, tempOrder->direction);
-				Pack01.orderQueue[minCostIdx].status = 1;		//waiting
+				if(_sendOrder2Elevator(tempOrder->ID, tempOrder->floor, tempOrder->direction)) Pack01.orderQueue[minCostIdx].status = 1;		//waiting
 				pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 			}
 		}

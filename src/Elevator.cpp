@@ -154,6 +154,7 @@ bool Elevator::floorWithinRange(int floorNumber){
 
 
 Elevator::Elevator(){
+	_elevatorReady = -1;
 	myOnlyElevator = this;
 	protocolInit(go2floorFun, cost2get2floorFun, clearButtonLampFun);
 	 if (!elev_init()){
@@ -172,10 +173,56 @@ Elevator::Elevator(){
 //initial positioning to a valid floor	
 	if(_lastValidFloor == -1){
 		elev_set_motor_direction(DIRN_DOWN);
-		while((_lastValidFloor = elev_get_floor_sensor_signal()) == -1);
+		int nTries = 0;
+		while((_lastValidFloor = elev_get_floor_sensor_signal()) == -1){
+			//you have 10 seconds to get the elevator unstuck!
+			if(10000 == ++nTries){
+				printf("Starting: Motor Panel only mode\n");
+				elev_set_motor_direction(DIRN_STOP);
+				return;
+			}
+			//for 2 seconds the elevator will try to unstuck itself by moving downwards
+			if(nTries > 2000){
+				elev_set_motor_direction(DIRN_STOP);
+			}
+			//every second there will be this message
+			if(0 == (nTries & 0x03FF)) printf("the elevator is stucked! Please check!\n");
+			usleep(1000);
+		}
 		elev_set_motor_direction(DIRN_STOP);
 	}
+	printf("Valid floor reached during init phase. LVF = %d\n", _lastValidFloor);
 	
+	int tmpLVF;
+	if(0 == _lastValidFloor){
+		tmpLVF = 1;
+		elev_set_motor_direction(DIRN_UP);
+		int nTries = 0;
+		while((_lastValidFloor = elev_get_floor_sensor_signal()) != 1){
+			if(5000 == ++nTries){
+				printf("Motor is stucked!\nStarting: Motor Panel only mode\n");
+				elev_set_motor_direction(DIRN_STOP);
+				return;
+			}
+			usleep(1000);	
+		}
+	}
+	else if(N_FLOORS - 1 == _lastValidFloor){
+		tmpLVF = N_FLOORS - 2;
+		elev_set_motor_direction(DIRN_DOWN);	
+		int nTries = 0;
+		while((_lastValidFloor = elev_get_floor_sensor_signal()) != N_FLOORS - 2){
+			if(5000 == ++nTries){
+				printf("Motor is stucked!\nStarting: Motor Panel only mode\n");
+				elev_set_motor_direction(DIRN_STOP);
+				return;
+			}
+			usleep(1000);	
+		}
+	}
+	
+	_lastValidFloor = tmpLVF;
+
 	pthread_mutex_init(&ordersMutex, NULL);
 
 	if(pthread_create(&elevatorMoving, NULL, makeElevatorThread, (void*)this)) {
@@ -187,6 +234,8 @@ Elevator::Elevator(){
 		fprintf(stderr, "Error creating thread\n");
 		exit (EXIT_FAILURE);
 	}
+	_elevatorReady = 1;
+	printf("Starting: The Elevator has started\n");
 }
 
 Elevator::~Elevator(){
@@ -199,7 +248,8 @@ Elevator::~Elevator(){
 int Elevator::cost2get2floor(int floorNumber, int direction){
 //	int curFloor = elev_get_floor_sensor_signal();
 	if(_stopEnabled) return -1;
-	printf("LVF: %d\n", _currentOrderDirection);
+	if(_elevatorReady == -1) return -1;
+	//printf("LVF: %d\n", _currentOrderDirection);
 	if(_direction == 0) return (floorNumber == _lastValidFloor) ? 0 : ABS(floorNumber - _lastValidFloor) + N_FLOORS;
 	else{
 		if(_direction != direction) return -1;

@@ -14,6 +14,7 @@ typedef long unsigned int ulong;
 
 class Elevator{
 	private:
+		int				_elevatorReady;
 		int 			_lastValidFloor;
 		int 			_direction;							//0 - stall, (-1) - DOWN, 1 - UP
 		int 			_currentOrderDirection;
