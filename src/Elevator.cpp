@@ -261,7 +261,10 @@ int Elevator::cost2get2floor(int floorNumber, int direction){
 
 //This fuction is called from the Local server for external commands
 bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
-	if(cost2get2floor(floorNumber, direction) == -1) return false;										//If moving & floor not in interval, dont take order
+	printf("Serving order: %lu\n",requestID);
+	
+	if(_floorExtOrderID[floorNumber]) 					return false;
+	if(cost2get2floor(floorNumber, direction) == -1) 	return false;									//If moving & floor not in interval, dont take order
 	pthread_mutex_lock(&ordersMutex);
 	_floorStopSignal[floorNumber] = true;																//set before _direction because we are locking!
 	_direction = (floorNumber == _lastValidFloor) ? 0 : ((floorNumber > _lastValidFloor)? 1 : -1);		//case when elevator stands still is covered
