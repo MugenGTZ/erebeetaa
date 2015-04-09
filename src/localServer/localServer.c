@@ -3,10 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "../elevatorProtocol/elevatorProtocol.h"
 
-
-int main(){	
+int initElevatorProgram(){	
 	Elevator elev;
 	int newPress[8];
 	static int oldPress[8];
@@ -25,75 +28,129 @@ int main(){
 				newOrder.floor			= i/2;
 				newOrder.direction		= i & 0x01;
 				sendOrder(newOrder);
-	 			//elev.go2floor(1, 0, 1);
 				elev_set_button_lamp(newOrder.direction ? BUTTON_CALL_UP : BUTTON_CALL_DOWN, newOrder.floor ,1);
 			}
 			oldPress[i] = newPress[i];
 		}
 	}
+	return 0;
 }
 
-/*int main(){	
-	Elevator elev;
-//	int floorNum = 1, direction = -1, cost2go;
-//	int data[N_FLOORS][2];										//column 1 = UP; column 2 = DOWN;
+int spawn (char* program, char** arg_list){
+	pid_t child_pid;
+	child_pid = fork();
+	if (child_pid != 0)
+		return child_pid;
+	else {
+		execvp ("gnome-terminal", arg_list);
+		printf ("an error occurred in execvp\n");
+		abort ();
+	}
+}
 
+void* primaryPPFun(void *){
+	printf("**Primary Elevator Server!**\n");
+	int pipePP;
 	while(1){
+		pipePP = open("IPC_pipe", O_RDWR);
+		if(pipePP<1){ 
+			printf("Error opening pipe");
+			usleep(10000);
+			continue;
+		}
+		write(pipePP, "I am alive", strlen("I am alive"));
+		close(pipePP);
+		//printf("Written to pipe\n");
+		usleep(200000);
+	}
+	return 0;
+}
 
-		if(elev_get_button_signal(BUTTON_CALL_UP, 0)){
-			order newOrder;
-			newOrder.ID 			= (ulong)(rand());
-			newOrder.floor			= 0;
-			newOrder.direction		= 1;
-			sendOrder(newOrder);
- 			//elev.go2floor(1, 0, 1);
-			elev_set_button_lamp(BUTTON_CALL_UP, 0 ,1);
-		}
-		//else elev_set_button_lamp(BUTTON_CALL_UP, 0 ,0);
+int thereIsDataToRead(int fd) {
+	struct timeval timeout;
+	fd_set readfds;
+
+	timeout.tv_sec = 2;
+	timeout.tv_usec = 0;
+	FD_ZERO(&readfds);
+	FD_SET(fd, &readfds);
+	select(fd+1, &readfds, NULL, NULL, &timeout);
+	return (FD_ISSET(fd, &readfds));							//true if there is data
+}
+
+void* backUpPPFun(void *){
+	printf("**Backup Elevator Server!**\n");
+	int pipePP;
+	char data[10];
+	char* arg_list[] =  {(char*)"gnome-terminal",(char*)"-e",(char*)"./Elevator.o -b",NULL};
 	
-		for(int i=1; i<N_FLOORS - 1; i++){
-			if(elev_get_button_signal(BUTTON_CALL_UP, i) ){
-				order newOrder;
-				newOrder.ID 			= (ulong)(rand());
-				newOrder.floor			= i;
-				newOrder.direction		= 1;
-				sendOrder(newOrder);
-				//elev.go2floor(1, i, 1);
-				elev_set_button_lamp(BUTTON_CALL_UP, i ,1);	
-			}
-			//else elev_set_button_lamp(BUTTON_CALL_UP, i, 0);
+    while(1){
+		pipePP = open("IPC_pipe",O_RDONLY | O_NONBLOCK);
+		if(pipePP<1){ 
+			printf("Error opening pipe");
+			break;
+		}
+		if(!thereIsDataToRead(pipePP)){
+			printf("Timeout reached, I am primary now!\n");
+			spawn ((char*)"gnome-terminal", arg_list);
+			printf ("Backup spawned\n");	
+			break;
+		}
+    	read(pipePP, &data, 10); 
+		close(pipePP);
+
+		//printf("Read value from FIFO is: %s\n", data);
+		usleep(200000);
+	}
+	return 0;
+}
+
+int primaryProgram(){
+	int pipe;
+	char* arg_list[] =  {(char*)"gnome-terminal",(char*)"-e",(char*)"./Elevator.o -b",NULL};
+	pthread_t primaryPP;
 	
-			if(elev_get_button_signal(BUTTON_CALL_DOWN, i) ){
-				order newOrder;
-				newOrder.ID 			= (ulong)(rand());
-				newOrder.floor			= i;
-				newOrder.direction		= -1;
-				sendOrder(newOrder);
- 				//elev.go2floor(1, i, -1);
-				elev_set_button_lamp(BUTTON_CALL_DOWN, i ,1);
-			}	
-		//	else elev_set_button_lamp(BUTTON_CALL_DOWN, i ,0);	
-		}
-		
-		if(elev_get_button_signal(BUTTON_CALL_DOWN, N_FLOORS - 1)){
-			order newOrder;
- 			newOrder.ID 			= (ulong)(rand());
-			newOrder.floor			= N_FLOORS - 1;
-			newOrder.direction		= -1;
-			sendOrder(newOrder);
-			//elev.go2floor(1, N_FLOORS - 1, -1);			
-			elev_set_button_lamp(BUTTON_CALL_DOWN, N_FLOORS - 1 ,1);
-		}
-		//else elev_set_button_lamp(BUTTON_CALL_DOWN, N_FLOORS - 1 ,0);
-		
-		//
-		//printf("Enter floor number and direction: ");
-		//scanf("%d %d",&floorNum, &direction);
-		//cost2go = elev.cost2get2floor(floorNum, direction);
-		//printf("Cost: %d\n", cost2go);
-		//if(cost2go != -1) elev.go2floor(1, floorNum, direction);
-		////usleep(5);
+	system("rm IPC_pipe");
+	pipe = mkfifo("IPC_pipe",0666);
+	if(pipe < 0){
+		printf("Unable to create a pipe");
+		exit(-1);
+	 }
+	else printf("Pipe successfully created\n");
+	
+	spawn ((char*)"gnome-terminal", arg_list);
+	printf ("Backup spawned\n");
+	
+	if(pthread_create(&primaryPP, NULL, primaryPPFun, NULL)) {
+		fprintf(stderr, "Error creating thread\n");
+		exit (EXIT_FAILURE);
 	}
 	
+	initElevatorProgram();
 	return 0;
-}*/
+}
+
+int BackUpProgram(){
+	pthread_t backUpPP, primaryPP;
+	
+	if(pthread_create(&backUpPP, NULL, backUpPPFun, NULL)) {
+		fprintf(stderr, "Error creating thread\n");
+		exit (EXIT_FAILURE);
+	}
+	
+	pthread_join(backUpPP, NULL);
+	
+	if(pthread_create(&primaryPP, NULL, primaryPPFun, NULL)) {
+		fprintf(stderr, "Error creating thread\n");
+		exit (EXIT_FAILURE);
+	}
+	
+	initElevatorProgram();
+	
+	return 0;
+}
+
+int main(int argc, char** argv){
+	if(argc > 1){ if(!strcmp(argv[1], "-b")) return BackUpProgram();}
+	return primaryProgram();
+}
