@@ -26,9 +26,9 @@ int initElevatorProgram(){
 				order newOrder;
 				newOrder.ID 			= (ulong)(rand());
 				newOrder.floor			= i/2;
-				newOrder.direction		= i & 0x01;
+				newOrder.direction		= (i & 0x01) ? 1 : -1;
 				sendOrder(newOrder);
-				elev_set_button_lamp(newOrder.direction ? BUTTON_CALL_UP : BUTTON_CALL_DOWN, newOrder.floor ,1);
+				elev_set_button_lamp((newOrder.direction == 1) ? BUTTON_CALL_UP : BUTTON_CALL_DOWN, newOrder.floor ,1);
 			}
 			oldPress[i] = newPress[i];
 		}

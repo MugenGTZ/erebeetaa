@@ -25,21 +25,7 @@ void clearButtonLampFun(int floor, bool upwards){
 
 
 #define ABS(a) ({ __typeof__ (a) _a = (a); _a > 0 ? _a : -_a; })
-/*
-int main(){
-	Elevator elev;
-	int floorNum = 1, direction = -1, cost2go;
-	while(1){
-		printf("Enter floor number and direction: ");
-		scanf("%d %d",&floorNum, &direction);
-		cost2go = elev.cost2get2floor(floorNum, direction);
-		printf("Cost: %d\n", cost2go);
-		if(cost2go != -1) elev.go2floor(1, floorNum, direction);
-		//usleep(5);
-	}
-	return 0;
-}
-*/
+
 void* makeElevatorThread(void* elevator) {
 	((Elevator*)elevator)->updateElevator();
 	printf("Exit!\n");
@@ -250,11 +236,17 @@ int Elevator::cost2get2floor(int floorNumber, int direction){
 	if(_stopEnabled) return -1;
 	if(_elevatorReady == -1) return -1;
 	//printf("LVF: %d\n", _currentOrderDirection);
+	printf("[f:%d,dir1:%d,dir2:%d,lvf:%d,],",floorNumber,_direction,direction,_lastValidFloor);
+	
 	if(_direction == 0) return (floorNumber == _lastValidFloor) ? 0 : ABS(floorNumber - _lastValidFloor) + N_FLOORS;
 	else{
+		printf("-1-");
 		if(_direction != direction) return -1;
+		printf("-2-");
 		if((_currentOrderDirection != 0) && (_currentOrderDirection != direction)) return -1;
+		printf("-3-");
 		if(!floorWithinRange(floorNumber)) return -1;
+		printf("-4-");
 		return ABS(floorNumber - _lastValidFloor);
 	}
 }
