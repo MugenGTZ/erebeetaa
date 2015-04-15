@@ -1,14 +1,14 @@
 #include "Elevator.h"
 #include "HW/elev.h"
+#include "toolbox.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include "elevatorProtocol/elevatorProtocol.h"
 
-//going against the rules
 Elevator *myOnlyElevator;
 
-int cost2get2floorFun(int floorNumber, int direction){
+int cost2get2floorFun(int floorNumber, int direction){										
 	if(myOnlyElevator) return myOnlyElevator->cost2get2floor(floorNumber, direction);
 	else return -1;
 }
@@ -24,10 +24,8 @@ void clearButtonLampFun(int floor, bool upwards){
 }
 
 
-#define ABS(a) ({ __typeof__ (a) _a = (a); _a > 0 ? _a : -_a; })
-
 void* makeElevatorThread(void* elevator) {
-	((Elevator*)elevator)->updateElevator();
+	((Elevator*)elevator)->updateElevatorState();
 	printf("Exit!\n");
 	return 0;
 }
@@ -40,10 +38,15 @@ void* makeInternalOrdersThread(void* elevator) {
 }
 
 
-int cc = 0;
-void Elevator::updateElevator(){
+/*//////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+//This function moves elevator to server orders  and keeps track of its internal state
+//Elevator is moving until it reaches a floor (determined by reading the floor sensor)
+//It stops if there is an order for that floo
+////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////*/
+void Elevator::updateElevatorState(){														
 	while(1){
-		//usleep(1000);
 		if((_stopEnabled = elev_get_stop_signal())){
 	 		elev_set_motor_direction(DIRN_STOP);
 			elev_set_stop_lamp(1);
@@ -52,63 +55,76 @@ void Elevator::updateElevator(){
 			elev_set_stop_lamp(0);
 			elev_set_motor_direction((elev_motor_direction_t)_direction);
 			int curFloor = elev_get_floor_sensor_signal();
-			if(curFloor != -1){
-				_lastValidFloor = curFloor;
-				elev_set_floor_indicator(_lastValidFloor);
-				if(_floorStopSignal[_lastValidFloor]){						
-					elev_set_motor_direction(DIRN_STOP);										//stop the motor because we reached the desired floor
-
-					if(_floorExtOrderID[_lastValidFloor] != 0){
-						if(_currentOrderDirection == 1) elev_set_button_lamp(BUTTON_CALL_UP, _lastValidFloor ,0);
-						else elev_set_button_lamp(BUTTON_CALL_DOWN, _lastValidFloor ,0);	
-						internalOrderDone(_floorExtOrderID[_lastValidFloor]);	
-						_floorExtOrderID[_lastValidFloor] = 0;
-					}
-
-					pthread_mutex_lock(&ordersMutex);				
-					_floorStopSignal[_lastValidFloor] = false;
-					pthread_mutex_unlock(&ordersMutex);
-
-					if(nextStoppingFloor(_direction) == -1) 
-						_direction = _currentOrderDirection;
-					Door::openAndCloseDoor();													//open door and wait to let passangers in/out	
-
-					if(nextStoppingFloor(_direction) == -1){									//no more requests in current direction?
-						_direction = (nextStoppingFloor(-_direction) == -1) ? 0 : -_direction;	//stop or change direction(in case of other requests)
-						_currentOrderDirection = _direction;					
-					}		
-				}
-				else{
-					if(_direction == 0){														//elevator is stopped?
-						int nextFloorUp = nextStoppingFloor(1);									//orders in UP direction?
-						int nextFloorDown = nextStoppingFloor(-1);								//orders in DOWN direction?
-						if((nextFloorUp >= 0) || (nextFloorDown>= 0)){
-							if(nextFloorUp >= 0 && nextFloorDown>= 0)
-								_direction = (nextFloorUp-_lastValidFloor > _lastValidFloor - nextFloorDown) ? 1 : -1;	//go to the nearest floor
-							else 
-								_direction = (nextFloorUp >= 0) ? 1 : -1;	
-						}
-						elev_set_motor_direction((elev_motor_direction_t)_direction);
-					}
-					else if(nextStoppingFloor(_direction) == -1){								//elevator is moving in direction where no orders exist 	
-						printf("Last floor and direction: %d %d\n",_lastValidFloor, _direction);
-						printf("Invalid condition, you are moving to no floor\n");				
-						elev_set_motor_direction(DIRN_STOP);
-						exit(1);
-					}
-				}
-			}
+			if(curFloor != -1)	hasArrivedToFloor(curFloor);
 		}
 	}
 }
 
+void Elevator::hasArrivedToFloor(int curFloor){
+	_lastValidFloor = curFloor;
+	elev_set_floor_indicator(_lastValidFloor);
+	if(_floorStopSignal[_lastValidFloor])		arrivedToFloorWithOrder();
+	else{
+		if(_direction == 0)						arrivedToFloorWithNoOrder();							//elevator is stopped?
+		else if(nextStoppingFloor(_direction) == -1){													//elevator is moving in direction where no orders exist 	
+			printf("Last floor and direction: %d %d\n",_lastValidFloor, _direction);
+			printf("Invalid condition, you are moving to no floor\n");				
+			elev_set_motor_direction(DIRN_STOP);
+			exit(1);
+		}
+	}
+}
+
+void Elevator::arrivedToFloorWithNoOrder(){
+	int nextFloorUp = nextStoppingFloor(1);																//orders in UP direction?
+	int nextFloorDown = nextStoppingFloor(-1);															//orders in DOWN direction?
+	if((nextFloorUp >= 0) || (nextFloorDown>= 0)){
+		if(nextFloorUp >= 0 && nextFloorDown>= 0)
+			_direction = (nextFloorUp-_lastValidFloor > _lastValidFloor - nextFloorDown) ? 1 : -1;		//go to the nearest floor
+		else 
+			_direction = (nextFloorUp >= 0) ? 1 : -1;	
+	}
+	elev_set_motor_direction((elev_motor_direction_t)_direction);
+}
+
+void Elevator::arrivedToFloorWithOrder(){
+	elev_set_motor_direction(DIRN_STOP);																//stop the motor because we reached the desired floor
+
+	if(_floorExtOrderID[_lastValidFloor] != 0){															//clear the order
+		if(_currentOrderDirection == 1) elev_set_button_lamp(BUTTON_CALL_UP, _lastValidFloor ,0);		//turn off the corresponding lamp
+		else elev_set_button_lamp(BUTTON_CALL_DOWN, _lastValidFloor ,0);	
+		internalOrderDone(_floorExtOrderID[_lastValidFloor]);											//notify the protocol about the completion of the order
+		_floorExtOrderID[_lastValidFloor] = 0;															//clear external orders for the floor
+	}
+
+	pthread_mutex_lock(&_ordersMutex);				
+	_floorStopSignal[_lastValidFloor] = false;															//mark floor as served 
+	pthread_mutex_unlock(&_ordersMutex);
+
+	if(nextStoppingFloor(_direction) == -1) 
+		_direction = _currentOrderDirection;															//restoring the direction of the moving after serving an internal order
+		
+	Door::openAndCloseDoor();																			//open door and wait to let passangers in/out	
+
+	if(nextStoppingFloor(_direction) == -1){															//no more requests in current direction?
+		_direction = (nextStoppingFloor(-_direction) == -1) ? 0 : -_direction;							//stop or change direction(in case of other requests)
+		_currentOrderDirection = _direction;					
+	}	
+}
+
+/*//////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+//
+////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////*/
+
 void Elevator::serveInternalOrders(){
 	while(1){
 		for(int i=0; i<N_FLOORS; i++){
-			pthread_mutex_lock(&ordersMutex);
+			pthread_mutex_lock(&_ordersMutex);
 			_floorStopSignal[i] = _floorStopSignal[i] || elev_get_button_signal(BUTTON_COMMAND, i); //taking internal orders
 			elev_set_button_lamp(BUTTON_COMMAND, i, _floorStopSignal[i]);
-			pthread_mutex_unlock(&ordersMutex);
+			pthread_mutex_unlock(&_ordersMutex);
 		}	
 	}
 }
@@ -209,14 +225,14 @@ Elevator::Elevator(){
 	
 	_lastValidFloor = tmpLVF;
 
-	pthread_mutex_init(&ordersMutex, NULL);
+	pthread_mutex_init(&_ordersMutex, NULL);
 
-	if(pthread_create(&elevatorMoving, NULL, makeElevatorThread, (void*)this)) {
+	if(pthread_create(&_elevatorMotionThread, NULL, makeElevatorThread, (void*)this)) {
 		fprintf(stderr, "Error creating thread\n");
 		exit (EXIT_FAILURE);
 	}
 
-	if(pthread_create(&internalOrdersServing, NULL, makeInternalOrdersThread, (void*)this)) {
+	if(pthread_create(&_internalOrdersServerThread, NULL, makeInternalOrdersThread, (void*)this)) {
 		fprintf(stderr, "Error creating thread\n");
 		exit (EXIT_FAILURE);
 	}
@@ -232,35 +248,29 @@ Elevator::~Elevator(){
 //else cost = -1;
 //If the elevator is standing still then the cost = Difference in floors + total floors(lower the priority).
 int Elevator::cost2get2floor(int floorNumber, int direction){
-//	int curFloor = elev_get_floor_sensor_signal();
+
 	if(_stopEnabled) return -1;
 	if(_elevatorReady == -1) return -1;
-	//printf("LVF: %d\n", _currentOrderDirection);
-	printf("[f:%d,dir1:%d,dir2:%d,lvf:%d,],",floorNumber,_direction,direction,_lastValidFloor);
 	
 	if(_direction == 0) return (floorNumber == _lastValidFloor) ? 0 : ABS(floorNumber - _lastValidFloor) + N_FLOORS;
 	else{
-		printf("-1-");
 		if(_direction != direction) return -1;
-		printf("-2-");
 		if((_currentOrderDirection != 0) && (_currentOrderDirection != direction)) return -1;
-		printf("-3-");
 		if(!floorWithinRange(floorNumber)) return -1;
-		printf("-4-");
 		return ABS(floorNumber - _lastValidFloor);
 	}
 }
 
-//This fuction is called from the Local server for external commands
+//This fuction is called from the protocol for external commands
 bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
 	printf("Serving order: %lu\n",requestID);
 	
 	if(_floorExtOrderID[floorNumber]) 					return false;
 	if(cost2get2floor(floorNumber, direction) == -1) 	return false;									//If moving & floor not in interval, dont take order
-	pthread_mutex_lock(&ordersMutex);
+	pthread_mutex_lock(&_ordersMutex);
 	_floorStopSignal[floorNumber] = true;																//set before _direction because we are locking!
 	_direction = (floorNumber == _lastValidFloor) ? 0 : ((floorNumber > _lastValidFloor)? 1 : -1);		//case when elevator stands still is covered
-	pthread_mutex_unlock(&ordersMutex);
+	pthread_mutex_unlock(&_ordersMutex);
 	_currentOrderDirection = direction;
 
 	_floorExtOrderID[floorNumber] = requestID;
