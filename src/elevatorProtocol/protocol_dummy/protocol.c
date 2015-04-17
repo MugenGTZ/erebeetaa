@@ -92,7 +92,7 @@ void networkConnectionOrientedCallBack(chan extChan){
 	Chanorder rcvOrder;
 	ssize_t len;
 	nErr error;
-	
+	printf("TCP server: Oh, Somebody has called me");
 	if(NE_NO_ERROR != (error = chanRecv(extChan, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
 		displayErr(error); 
 		closeChannel(extChan);		
@@ -204,6 +204,7 @@ void internalOrderResume(ulong id){
 	pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 }
 
+static bool disableNetwork = false;
 void* dispatchOrders(void *){
 	while(1){
 		//make Pack
@@ -225,9 +226,11 @@ void* dispatchOrders(void *){
 		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
 		
 		if(skip) continue;
-		pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
-		sendBroadcast((char*)&Pack01, sizeof(udpPack));
-		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+		if(disableNetwork == false){
+			pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
+				sendBroadcast((char*)&Pack01, sizeof(udpPack));
+			pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+		}
 		usleep(500000);
 		
 		//find the global min cost
@@ -265,6 +268,7 @@ void* dispatchOrders(void *){
 				printf("Alien[%lu] will do this(%d):%d\n", Pack01.orderQueue[minCostIdx].dest, minCostIdx,minCost);
 				chan channel = createChannel(remoteNetcard);															    
 				if((int)channel < 0){
+					disableNetwork = true;
 					printf("Channel setup error. Closing the channel!\n"); 
 					closeChannel(channel);
 				}
@@ -272,6 +276,7 @@ void* dispatchOrders(void *){
 					nErr error;
 				
 					if(NE_NO_ERROR != (error = chanSend(channel, (char*)&remoteOrder, sizeof(Chanorder)))){
+						disableNetwork = true;
 						displayErr(error); 
 						closeChannel(channel); 
 						//return;
@@ -282,6 +287,7 @@ void* dispatchOrders(void *){
 						Chanorder rcvOrder;
 						ssize_t len;
 						if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+							disableNetwork = true;
 							displayErr(error); 
 							closeChannel(channel);
 							internalOrderResume(remoteOrder.ID);		
@@ -305,6 +311,7 @@ void* dispatchOrders(void *){
 			}
 			//Else do the task
 			else{
+				disableNetwork = false;
 				pthread_mutex_lock(&udpPack01Mutex);				//START OF CRITICAL REGION
 				printf("this computer should serve this:%d!\n",minCost);	
 				volatile order *tempOrder = &(Pack01.orderQueue[minCostIdx].myOrder);

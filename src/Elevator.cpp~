@@ -89,25 +89,21 @@ void Elevator::arrivedToFloorWithNoOrder(){
 
 void Elevator::arrivedToFloorWithOrder(){
 	elev_set_motor_direction(DIRN_STOP);																//stop the motor because we reached the desired floor
-	
-	bool 	shouldCallInternalOrderDone = false;
-	ulong	InternalOrderDoneParam;
 
 	pthread_mutex_lock(&_ordersMutex);
 		if(_floorExtOrderID[_lastValidFloor] != 0 && _floorExtOrderDir[_lastValidFloor] != 0){				//clear the order
 			if(_floorExtOrderDir[_lastValidFloor] == 1) elev_set_button_lamp(BUTTON_CALL_UP, _lastValidFloor ,0);	//turn off lamp
-			else elev_set_button_lamp(BUTTON_CALL_DOWN, _lastValidFloor ,0);
-			shouldCallInternalOrderDone = true;
-			InternalOrderDoneParam		= _floorExtOrderID[_lastValidFloor];
+			else elev_set_button_lamp(BUTTON_CALL_DOWN, _lastValidFloor ,0);	
+			internalOrderDone(_floorExtOrderID[_lastValidFloor]);											//notify protocol
+		
 		}
-		_floorExtOrderID[_lastValidFloor]	= 0;															//clear external orders for the floor
+		_floorExtOrderID[_lastValidFloor]	= 0;														//clear external orders for the floor
 		_floorExtOrderDir[_lastValidFloor]	= 0;
-		_floorStopSignal[_lastValidFloor] = false;															//mark floor as served 
 	pthread_mutex_unlock(&_ordersMutex);
-	
-	if(shouldCallInternalOrderDone)
-		internalOrderDone(InternalOrderDoneParam);															//notify protocol
-	
+
+	pthread_mutex_lock(&_ordersMutex);				
+	_floorStopSignal[_lastValidFloor] = false;															//mark floor as served 
+	pthread_mutex_unlock(&_ordersMutex);
 
 	if(nextStoppingFloor(_direction) == -1) 
 		_direction = _currentOrderDirection;															//restoring the direction of the moving after serving an internal order
@@ -130,8 +126,8 @@ void Elevator::serveInternalOrders(){
 	while(1){
 		for(int i=0; i<N_FLOORS; i++){
 			pthread_mutex_lock(&_ordersMutex);
-				_floorStopSignal[i] = _floorStopSignal[i] || elev_get_button_signal(BUTTON_COMMAND, i); //taking internal orders
-				elev_set_button_lamp(BUTTON_COMMAND, i, _floorStopSignal[i]);
+			_floorStopSignal[i] = _floorStopSignal[i] || elev_get_button_signal(BUTTON_COMMAND, i); //taking internal orders
+			elev_set_button_lamp(BUTTON_COMMAND, i, _floorStopSignal[i]);
 			pthread_mutex_unlock(&_ordersMutex);
 		}	
 	}
@@ -261,10 +257,6 @@ int Elevator::cost2get2floor(int floorNumber, int direction){
 	if(_stopEnabled) return -1;
 	if(_elevatorReady == -1) return -1;
 	
-
-	if(_floorExtOrderID[floorNumber] != 0) return -1;						//There is an order, so do not take the new order
-																			//Does not need mutex because we are reading.
-	
 	if(_direction == 0) return (floorNumber == _lastValidFloor) ? 0 : ABS(floorNumber - _lastValidFloor) + N_FLOORS;
 	else{
 		if(_direction != direction) return -1;
@@ -281,8 +273,7 @@ bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
 	bool returnValue = false;
 	
 	pthread_mutex_lock(&_ordersMutex);
-		printf("The cost is: %d",cost2get2floor(floorNumber, direction));
-		if((_floorExtOrderID[floorNumber] == 0) && (cost2get2floor(floorNumber, direction) != -1)){
+		if(_floorExtOrderID[floorNumber] != 0 && cost2get2floor(floorNumber, direction) != -1){
 			_floorStopSignal[floorNumber] = true;															//set before _direction because we are locking!
 			_direction = (floorNumber == _lastValidFloor) ? 0 : ((floorNumber > _lastValidFloor)? 1 : -1);	//case when elevator stands still is covered
 			_currentOrderDirection = direction;
@@ -307,7 +298,7 @@ bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
 
 	_floorExtOrderID[floorNumber] 	= requestID;
 	_floorExtOrderDir[floorNumber]	= direction;
-	return true;*/
+	return true;	*/
 }
 
 void Elevator::clearButtonLamp(int floor, bool upwards){

@@ -30,7 +30,6 @@ class Elevator{
 		bool 			_stopEnabled;										
 		bool 			_floorStopSignal[N_FLOORS];									//Indicator of existance of an order at a certain floor	
 		ulong			_floorExtOrderID[N_FLOORS];									//The ID of an external order at a certain floor
-		ulong			_floorExtOrderDir[N_FLOORS];
 		
 		//Helper functions										
 		bool 			floorWithinRange(int floorNumber);							//Checks if a floor is within our current floor and the last floor (that has been requested) in our current direction 
