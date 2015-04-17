@@ -36,8 +36,9 @@ class Elevator{
 		bool 			floorWithinRange(int floorNumber);							//Checks if a floor is within our current floor and the last floor (that has been requested) in our current direction 
 		int				nextStoppingFloor(int direction);							//Finds the nearest floor (that has been requested) in our current direction
 		void			hasArrivedToFloor(int number);
-		void			arrivedToFloorWithOrder();
-		void			arrivedToFloorWithNoOrder();
+		void			serveOrder();
+		void			respondToNewOrders();
+		void			directElevatorToNewOrder();
 		
 		pthread_t 		_elevatorMotionThread;										//Thread which controls the elevator's motion
 		pthread_t 		_internalOrdersServerThread;					
