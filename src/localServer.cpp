@@ -104,7 +104,7 @@ void networkConnectionOrientedCallBack(chan extChan){
 	ssize_t len;
 	nErr error;
 	printf("TCP server: Oh, Somebody has called me");
-	if(NE_NO_ERROR != (error = chanRecv(extChan, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+	if(NE_NO_ERROR != (error = chanRecv(extChan, (char*)&rcvOrder, &len, sizeof(Chanorder), 10))){
 		displayErr(error); 
 		closeChannel(extChan);		
 	}
@@ -196,16 +196,14 @@ void internalOrderDone(ulong id){
 	pthread_mutex_lock(&udpPack01Mutex);										//START OF CRITICAL REGION
 	for(int i = 0; i < 8;i++){
 		volatile order *tempOrder = &(Pack01.orderQueue[i].myOrder);
+		if(semaphoreMap.find(id) != semaphoreMap.end()){
+			printf("Signalling the semaphore with ID = %lu\n", id);
+			sem_post(semaphoreMap[id]);
+			semaphoreMap.erase(id);
+		}
 		if(tempOrder->ID == id) {
 			Pack01.orderQueue[i].status = 0;
 			_clearButtonLamp(Pack01.orderQueue[i].myOrder.floor, Pack01.orderQueue[i].myOrder.direction == 1);
-		}
-		else{
-			if(semaphoreMap.find(id) != semaphoreMap.end()){
-				printf("Signalling the semaphore with ID = %lu\n", id);
-				sem_post(semaphoreMap[id]);
-				semaphoreMap.erase(id);
-			}
 		}
 	}
 	
@@ -235,6 +233,33 @@ void internalOrderResume(ulong id){
 	
 	printOrderStatus();
 	pthread_mutex_unlock(&udpPack01Mutex);										//END OF CRITICAL REGION
+}
+
+typedef struct _threadParam{									
+	volatile int*	status;
+	sem_t* 	semaphore;
+}threadParam;
+
+void* internalOrderDoneFun(void *param){
+	timespec timeoutTime;
+	
+	if (clock_gettime(CLOCK_REALTIME, &timeoutTime) == -1) {
+        perror("clock_gettime");
+        exit(EXIT_FAILURE);
+    }
+	timeoutTime.tv_sec += 10;
+	
+	sem_t* orderSem = ((threadParam*)param)->semaphore;
+	printf("Entering timedwait! \n");
+
+	if(sem_timedwait(orderSem, &timeoutTime) == -1){
+		printf("Leaving timedwait! \n");
+		*((threadParam*)param)->status = 2;									//TODO
+		sem_wait(orderSem);
+	}
+	
+	sem_destroy(orderSem);
+	return NULL;
 }
 
 static bool _disableNetwork = false;
@@ -326,7 +351,7 @@ void* dispatchOrders(void *){
 						internalOrderPause(remoteOrder.ID);
 						Chanorder rcvOrder;
 						ssize_t len;
-						if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 5))){
+						if(NE_NO_ERROR != (error = chanRecv(channel, (char*)&rcvOrder, &len, sizeof(Chanorder), 10))){
 							_disableNetwork = true;
 							displayErr(error); 
 							closeChannel(channel);
@@ -351,13 +376,33 @@ void* dispatchOrders(void *){
 			}
 			//Serve the order locally
 			else{
+				sem_t intOrdSem;
+				bool hasServedOrder = false;
 				_disableNetwork = false;
 				pthread_mutex_lock(&udpPack01Mutex);															//START OF CRITICAL REGION
 				printf("This computer should serve this order.\n");	
 				volatile order *tempOrder = &(Pack01.orderQueue[minCostIdx].myOrder);
 				
-				if(_sendOrder2Elevator(tempOrder->ID, tempOrder->floor, tempOrder->direction)) Pack01.orderQueue[minCostIdx].status = 1;		
+				if(_sendOrder2Elevator(tempOrder->ID, tempOrder->floor, tempOrder->direction)){
+					hasServedOrder = true;
+					sem_init(&intOrdSem, 0, 0);
+					semaphoreMap[(ulong)(tempOrder->ID)] = &intOrdSem;
+					Pack01.orderQueue[minCostIdx].status = 1;		
+				}
 				pthread_mutex_unlock(&udpPack01Mutex);															//END OF CRITICAL REGION
+				
+				threadParam param;
+				param.semaphore = &intOrdSem;
+				param.status = &(Pack01.orderQueue[minCostIdx].status);
+				
+				if(hasServedOrder){
+					pthread_t internalOrderDoneWaitThread;
+					if(pthread_create(&internalOrderDoneWaitThread, NULL, internalOrderDoneFun, (void*) &param)){
+						fprintf(stderr, "Error creating thread\n");
+						exit (EXIT_FAILURE);
+					}
+				}
+				
 			}
 		}
 		usleep(100000);	
