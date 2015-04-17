@@ -15,6 +15,8 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <arpa/inet.h>
+#include <semaphore.h>
+#include <map>
 #include "../../Networking/src/network.h"
 
 #define PORT 20000													//port for UDP broadcast
@@ -95,6 +97,8 @@ void networkConnectionlessCallBack(netcard num, char *data, int32_t len){
 //If a peer knows that we can serve an order he will send it to us (with the connection oriented protocol)
 //We proccess the order. We inform him if we can serve it or not (we might be unable to serve it if we received another order before his)
 //We close the channel after we are done
+
+std::map<ulong, sem_t*> semaphoreMap;
 void networkConnectionOrientedCallBack(chan extChan){
 	Chanorder rcvOrder;
 	ssize_t len;
@@ -115,6 +119,16 @@ void networkConnectionOrientedCallBack(chan extChan){
 				rcvOrder.success = false;
 		}
 		pthread_mutex_unlock(&udpPack01Mutex);				//END OF CRITICAL REGION
+		
+		if(rcvOrder.success){//TODO
+			sem_t signalSem;
+			sem_init(&signalSem, 0, 0);
+			semaphoreMap[rcvOrder.ID] = &signalSem;
+			printf("Waiting on semaphore with ID = %lu\n", rcvOrder.ID);
+			sem_wait(&signalSem);
+			printf("Done waiting on semaphore with ID = %lu\n", rcvOrder.ID);
+			sem_destroy(&signalSem);
+		}
 		
 		if(NE_NO_ERROR != (error = chanSend(extChan, (char*)&rcvOrder, sizeof(Chanorder)))) displayErr(error); 
 		else printf("Successful sending of confirmation of order to the origin TCP node\n");
@@ -185,6 +199,13 @@ void internalOrderDone(ulong id){
 		if(tempOrder->ID == id) {
 			Pack01.orderQueue[i].status = 0;
 			_clearButtonLamp(Pack01.orderQueue[i].myOrder.floor, Pack01.orderQueue[i].myOrder.direction == 1);
+		}
+		else{
+			if(semaphoreMap.find(id) != semaphoreMap.end()){
+				printf("Signalling the semaphore with ID = %lu\n", id);
+				sem_post(semaphoreMap[id]);
+				semaphoreMap.erase(id);
+			}
 		}
 	}
 	
