@@ -314,7 +314,10 @@ bool Elevator::go2floor(ulong requestID, int floorNumber, int direction){
 			returnValue = true;
 		}
 	pthread_mutex_unlock(&_ordersMutex);
-	
+	if (returnValue){
+		if (direction == 1) elev_set_button_lamp(BUTTON_CALL_UP, floorNumber, 1);
+		else				elev_set_button_lamp(BUTTON_CALL_DOWN, floorNumber, 1);
+	}
 	return returnValue;
 	
 }
